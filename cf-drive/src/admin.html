@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cf-drive admin</title>
+<style>
+:root{--bg:#fafaf9;--fg:#1c1917;--muted:#78716c;--line:#e7e5e4;--card:#fff;--accent:#2563eb;--bad:#dc2626;--ok:#16a34a}
+@media (prefers-color-scheme:dark){:root{--bg:#0c0a09;--fg:#e7e5e4;--muted:#a8a29e;--line:#292524;--card:#1c1917;--accent:#60a5fa;--bad:#f87171;--ok:#4ade80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:920px;margin:0 auto;padding:24px 16px 64px}
+header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:24px}
+h1{font-size:18px;margin:0}h2{font-size:15px;margin:32px 0 8px}
+.muted{color:var(--muted)}
+section{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:500;color:var(--muted);font-size:12px}
+tr:last-child td{border-bottom:0}
+input,select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%}
+input[type=checkbox]{width:auto}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:6px;padding:5px 12px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--bad)}
+button.link{border:0;background:none;color:var(--accent);padding:0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 12px}
+label{display:block;font-size:12px;color:var(--muted)}
+label input,label select{margin-top:2px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;width:120px}.bar i{display:block;height:100%;background:var(--accent)}
+code{font:12px ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 5px;word-break:break-all}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);width:min(680px,calc(100vw - 32px));padding:20px}
+dialog::backdrop{background:rgb(0 0 0 / .4)}
+.mounts td{padding:4px}.mounts input{padding:4px 6px}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:6px;display:none}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+@media (max-width:600px){.hide-sm{display:none}}
+</style>
+</head>
+<body>
+<main>
+  <header><h1>cf-drive</h1><button class="link" id="logout" hidden>Sign out</button></header>
+
+  <section id="login" hidden>
+    <form id="loginForm" class="row">
+      <input type="password" name="password" placeholder="Admin password" autocomplete="current-password" style="max-width:260px" required>
+      <button class="primary">Sign in</button>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <section>
+      <div class="muted">Connect</div>
+      <div style="margin-top:6px">WebDAV: <code id="davUrl"></code></div>
+      <div style="margin-top:4px">S3 endpoint: <code id="s3Url"></code> <span class="muted">(path-style, any region)</span></div>
+    </section>
+
+    <h2>Storage backends</h2>
+    <section>
+      <table><thead><tr><th>ID</th><th>Type</th><th class="hide-sm">Target</th><th></th></tr></thead><tbody id="backends"></tbody></table>
+      <div class="row" style="margin-top:10px"><button id="addBackend">Add backend</button></div>
+    </section>
+
+    <h2>Users</h2>
+    <section>
+      <table><thead><tr><th>User</th><th>Usage</th><th class="hide-sm">Drives</th><th></th></tr></thead><tbody id="users"></tbody></table>
+      <div class="row" style="margin-top:10px"><button id="addUser">Add user</button></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="backendDlg">
+  <form id="backendForm" method="dialog">
+    <h2 style="margin-top:0" id="backendTitle">Backend</h2>
+    <div class="grid">
+      <label>ID<input name="id" required pattern="[a-z0-9][a-z0-9._\-]*"></label>
+      <label>Type<select name="type"></select></label>
+    </div>
+    <div class="grid" id="backendFields" style="margin-top:10px"></div>
+    <p class="muted" id="backendHint"></p>
+    <div class="row" style="justify-content:flex-end;margin-top:16px">
+      <span id="testResult" style="margin-right:auto"></span>
+      <button type="button" value="cancel" onclick="this.closest('dialog').close()">Cancel</button>
+      <button class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="userDlg">
+  <form id="userForm" method="dialog">
+    <h2 style="margin-top:0" id="userTitle">User</h2>
+    <div class="grid">
+      <label>Username<input name="username" required pattern="[a-z0-9][a-z0-9._\-]*"></label>
+      <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8"></label>
+      <label>Quota (GB, 0 = unlimited)<input name="quota" type="number" min="0" step="any" value="0"></label>
+      <label>Max file size (MB, 0 = unlimited)<input name="maxFile" type="number" min="0" step="any" value="0"></label>
+    </div>
+    <label class="row" style="margin-top:10px;color:inherit"><input type="checkbox" name="enabled" checked> Enabled</label>
+    <h2>Drives</h2>
+    <p class="muted" style="margin-top:0">Each drive is a top-level folder in WebDAV and a bucket in S3.</p>
+    <div style="overflow-x:auto"><table class="mounts"><thead><tr><th>Name</th><th>Backend</th><th>Prefix</th><th>Read</th><th>Write</th><th>Delete</th><th></th></tr></thead><tbody id="mountRows"></tbody></table></div>
+    <button type="button" id="addMount" style="margin-top:6px">Add drive</button>
+    <div id="keys" style="margin-top:16px"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:16px">
+      <button type="button" onclick="this.closest('dialog').close()">Cancel</button>
+      <button class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const GB = 1024 ** 3, MB = 1024 ** 2;
+let S = null;
+
+function toast(msg, bad) {
+  const t = $('#toast'); t.textContent = msg; t.style.background = bad ? 'var(--bad)' : ''; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3000);
+}
+
+async function call(method, path, body) {
+  const res = await fetch('/admin/api/' + path, {
+    method, headers: body !== undefined ? { 'content-type': 'application/json' } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && path !== 'login') { show(false); throw new Error('signed out'); }
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function fmt(n) {
+  if (!n) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + ' ' + u[i];
+}
+
+function show(signedIn) {
+  $('#login').hidden = signedIn; $('#app').hidden = !signedIn; $('#logout').hidden = !signedIn;
+}
+
+function render(state) {
+  S = state;
+  const origin = location.origin;
+  $('#davUrl').textContent = origin + '/dav/';
+  $('#s3Url').textContent = origin;
+
+  $('#backends').innerHTML = S.backends.map((b) => {
+    const target = b.config.bucket || b.config.baseUrl || (b.type === 'r2-binding' ? 'binding ' + (b.config.binding || 'BUCKET') : '');
+    return `<tr><td><b>${esc(b.id)}</b></td><td>${esc(S.types[b.type]?.label || b.type)}</td><td class="hide-sm muted">${esc(target)}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="link" data-test="${esc(b.id)}">Test</button> · <button class="link" data-edit-backend="${esc(b.id)}">Edit</button> · <button class="link danger" data-del-backend="${esc(b.id)}">Delete</button></td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">No backends yet.</td></tr>';
+
+  $('#users').innerHTML = S.users.map((u) => {
+    const pct = u.quotaBytes ? Math.min(100, (u.usage / u.quotaBytes) * 100) : 0;
+    return `<tr><td><b>${esc(u.username)}</b>${u.enabled ? '' : ' <span class="bad">disabled</span>'}</td>
+      <td>${fmt(u.usage)}${u.quotaBytes ? ' / ' + fmt(u.quotaBytes) + `<div class="bar"><i style="width:${pct}%"></i></div>` : ' <span class="muted">/ unlimited</span>'}</td>
+      <td class="hide-sm">${u.mounts.map((m) => esc(m.name) + ' <span class="muted">' + (m.read ? 'r' : '') + (m.write ? 'w' : '') + (m.delete ? 'd' : '') + '</span>').join('<br>') || '<span class="muted">none</span>'}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="link" data-recount="${esc(u.username)}">Recount</button> · <button class="link" data-edit-user="${esc(u.username)}">Edit</button> · <button class="link danger" data-del-user="${esc(u.username)}">Delete</button></td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">No users yet.</td></tr>';
+}
+
+async function refresh() {
+  try { render(await call('GET', 'state')); show(true); } catch (e) { if (e.message !== 'signed out') toast(e.message, true); }
+}
+
+// ----- backends -----
+function backendFields(type, values, isEdit) {
+  const spec = S.types[type];
+  $('#backendFields').innerHTML = spec.fields.map((f) => `<label>${esc(f.label)}${f.required ? ' *' : ''}
+    <input name="cfg.${esc(f.key)}" ${f.secret ? 'type="password" autocomplete="off"' : ''}
+      placeholder="${esc(f.secret && isEdit ? '(unchanged)' : f.placeholder || '')}" value="${esc(values[f.key] || '')}"
+      ${f.required && !(f.secret && isEdit) ? 'required' : ''}></label>`).join('');
+  $('#backendHint').textContent = type === 'r2-binding'
+    ? (S.bindings.length ? 'R2 bindings on this Worker: ' + S.bindings.join(', ') : 'No R2 binding found. Add [[r2_buckets]] to wrangler.toml.')
+    : '';
+}
+
+function openBackend(b) {
+  const f = $('#backendForm'); f.reset(); $('#testResult').textContent = '';
+  $('#backendTitle').textContent = b ? 'Edit backend' : 'Add backend';
+  f.id.value = b?.id || ''; f.id.readOnly = !!b;
+  f.type.innerHTML = Object.entries(S.types).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
+  f.type.value = b?.type || 'r2-binding';
+  backendFields(f.type.value, b?.config || {}, !!b);
+  f.type.onchange = () => backendFields(f.type.value, {}, false);
+  $('#backendDlg').showModal();
+}
+
+$('#backendForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target, config = {};
+  for (const el of f.querySelectorAll('[name^="cfg."]')) config[el.name.slice(4)] = el.value;
+  try {
+    render(await call('PUT', 'backends/' + encodeURIComponent(f.id.value), { type: f.type.value, config }));
+    $('#backendDlg').close(); toast('Backend saved');
+  } catch (err) { toast(err.message, true); }
+});
+
+// ----- users -----
+function mountRow(m) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><input name="m.name" value="${esc(m.name || '')}" required pattern="[a-z0-9][a-z0-9.\\-]*" style="min-width:90px"></td>
+    <td><select name="m.backend">${S.backends.map((b) => `<option ${b.id === m.backend ? 'selected' : ''}>${esc(b.id)}</option>`).join('')}</select></td>
+    <td><input name="m.prefix" value="${esc(m.prefix || '')}" placeholder="(root)"></td>
+    <td><input type="checkbox" name="m.read" ${m.read ? 'checked' : ''}></td>
+    <td><input type="checkbox" name="m.write" ${m.write ? 'checked' : ''}></td>
+    <td><input type="checkbox" name="m.delete" ${m.delete ? 'checked' : ''}></td>
+    <td><button type="button" class="link danger" onclick="this.closest('tr').remove()">✕</button></td>`;
+  $('#mountRows').append(tr);
+}
+
+function openUser(u) {
+  const f = $('#userForm'); f.reset();
+  $('#userTitle').textContent = u ? 'Edit user' : 'Add user';
+  f.username.value = u?.username || ''; f.username.readOnly = !!u;
+  f.password.required = !u; f.password.placeholder = u ? '(unchanged)' : '';
+  f.quota.value = u ? +(u.quotaBytes / GB).toFixed(3) : 0;
+  f.maxFile.value = u ? +(u.maxFileBytes / MB).toFixed(3) : 0;
+  f.enabled.checked = u ? u.enabled : true;
+  $('#mountRows').innerHTML = '';
+  if (!S.backends.length) toast('Add a storage backend first', true);
+  (u?.mounts || (S.backends[0] ? [{ name: 'drive', backend: S.backends[0].id, prefix: f.username.value, read: true, write: true, delete: true }] : [])).forEach(mountRow);
+  $('#keys').innerHTML = u ? `<div class="muted">S3 credentials</div>
+    <div>Access key ID: <code>${esc(u.accessKeyId)}</code></div>
+    <div>Secret access key: <code>${esc(u.secretAccessKey)}</code></div>
+    <button type="button" class="link" id="rotate" style="margin-top:4px">Generate new keys</button>` : '<p class="muted">S3 keys are generated when the user is saved.</p>';
+  if (u) $('#rotate').onclick = async () => {
+    if (!confirm('Replace this user\'s S3 keys? Clients using the old keys stop working.')) return;
+    try { render(await call('POST', 'users/' + encodeURIComponent(u.username) + '/keys', {})); openUser(S.users.find((x) => x.username === u.username)); } catch (err) { toast(err.message, true); }
+  };
+  $('#userDlg').showModal();
+}
+
+$('#addMount').onclick = () => mountRow({ name: '', backend: S.backends[0]?.id, prefix: '', read: true, write: true, delete: true });
+
+$('#userForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const mounts = [...$('#mountRows').children].map((tr) => ({
+    name: $('[name="m.name"]', tr).value.trim(), backend: $('[name="m.backend"]', tr).value,
+    prefix: $('[name="m.prefix"]', tr).value.trim(),
+    read: $('[name="m.read"]', tr).checked, write: $('[name="m.write"]', tr).checked, delete: $('[name="m.delete"]', tr).checked,
+  }));
+  try {
+    render(await call('PUT', 'users/' + encodeURIComponent(f.username.value), {
+      password: f.password.value, enabled: f.enabled.checked,
+      quotaBytes: Math.round(f.quota.value * GB), maxFileBytes: Math.round(f.maxFile.value * MB), mounts,
+    }));
+    $('#userDlg').close(); toast('User saved');
+  } catch (err) { toast(err.message, true); }
+});
+
+// ----- clicks -----
+document.addEventListener('click', async (e) => {
+  const d = e.target.dataset || {};
+  try {
+    if (d.editBackend) openBackend(S.backends.find((b) => b.id === d.editBackend));
+    else if (d.delBackend && confirm('Delete backend "' + d.delBackend + '"? Stored files are not touched.')) {
+      render(await call('DELETE', 'backends/' + encodeURIComponent(d.delBackend))); toast('Backend deleted');
+    } else if (d.test) {
+      e.target.textContent = 'Testing…';
+      const r = await call('POST', 'backends/' + encodeURIComponent(d.test) + '/test', {});
+      e.target.textContent = 'Test'; toast(r.message, !r.ok);
+    } else if (d.editUser) openUser(S.users.find((u) => u.username === d.editUser));
+    else if (d.delUser && confirm('Delete user "' + d.delUser + '"? Their files stay in storage.')) {
+      render(await call('DELETE', 'users/' + encodeURIComponent(d.delUser))); toast('User deleted');
+    } else if (d.recount) {
+      e.target.textContent = 'Counting…';
+      render(await call('POST', 'users/' + encodeURIComponent(d.recount) + '/recount', {})); toast('Usage recounted');
+    }
+  } catch (err) { toast(err.message, true); refresh(); }
+});
+
+$('#addBackend').onclick = () => openBackend(null);
+$('#addUser').onclick = () => openUser(null);
+$('#logout').onclick = async () => { await call('POST', 'logout', {}); show(false); };
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try { await call('POST', 'login', { password: e.target.password.value }); e.target.reset(); refresh(); }
+  catch (err) { toast(err.message, true); }
+});
+
+refresh();
+</script>
+</body>
+</html>
